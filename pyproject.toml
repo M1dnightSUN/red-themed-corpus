@@ -1,0 +1,7 @@
+[project]
+name = "red-themed-corpus"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["python-docx>=1.1.0"]
