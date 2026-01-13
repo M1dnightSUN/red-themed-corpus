@@ -1,0 +1,1 @@
+modelscope download --model unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit --local_dir ./Qwen3-4B-Instruct-2507
