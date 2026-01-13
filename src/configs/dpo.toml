@@ -1,0 +1,23 @@
+[paths]
+base_model_path = "D:/models/Qwen2.5-7B-Instruct"
+sft_adapter_dir = "data/ckpt_sft"
+input_json = "data/red_dataset.json"
+output_dir = "data/ckpt_dpo"
+
+[data]
+seed = 42
+max_items = -1
+
+[train]
+max_seq_len = 2048
+per_device_batch_size = 1
+grad_accum_steps = 16
+learning_rate = 5e-5
+num_train_epochs = 1
+warmup_ratio = 0.03
+lr_scheduler_type = "cosine"
+logging_steps = 20
+save_steps = 500
+save_total_limit = 2
+beta = 0.1
+resume = true
