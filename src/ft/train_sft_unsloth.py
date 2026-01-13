@@ -7,7 +7,7 @@ from transformers import TrainingArguments
 from trl import SFTTrainer
 from unsloth import FastLanguageModel
 
-from utils_config import load_sft_config, find_latest_checkpoint
+from src.configs.utils_config import load_sft_config, find_latest_checkpoint
 
 
 CONFIG_PATH = "./configs/sft.toml"

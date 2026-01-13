@@ -20,7 +20,7 @@ from trl import DPOTrainer
 from unsloth import FastLanguageModel
 from peft import PeftModel
 
-from utils_config import load_dpo_config, find_latest_checkpoint
+from src.configs.utils_config import load_dpo_config, find_latest_checkpoint
 
 
 CONFIG_PATH = "./configs/dpo.toml"
