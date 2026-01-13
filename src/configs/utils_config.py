@@ -74,6 +74,7 @@ class DataPrepConfig:
     seed: int
     eval_ratio: float
     max_items: int
+    type_b_ratio: float
 
 
 @dataclass
@@ -154,6 +155,7 @@ def load_data_prep_config() -> DataPrepConfig:
         seed=int(cfg["data"]["seed"]),
         eval_ratio=float(cfg["data"]["eval_ratio"]),
         max_items=int(cfg["data"].get("max_items", -1)),
+        type_b_ratio=float(cfg["data"].get("type_b_ratio", 0.2)),
     )
 
 

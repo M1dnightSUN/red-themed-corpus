@@ -6,3 +6,4 @@ out_dir = "data/sft"
 seed = 42
 eval_ratio = 0.02
 max_items = -1
+type_b_ratio = 0.2 # 每条样本有 20% 概率生成 B 类（A 类永远生成）

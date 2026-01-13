@@ -18,26 +18,13 @@ from typing import Dict, List
 from src.configs.utils_config import load_data_prep_config
 
 
-# System prompt 主要约束输出结构、纠错流程与表达规范。
-# 具体观点结论由训练样本（ADVOCATE）提供，不在这里硬编码立场内容。
+# SFT 阶段的 system prompt 尽量与训练监督输出（ADVOCATE）的写作分布一致：
 SYSTEM_PROMPT = (
-    "你是中文政策与公共事务问答助手，面向社会治理、公益、基层治理、产业发展、党建与青年发展等议题进行对话式解答。\n"
-    "你的任务是：在不编造事实的前提下，给出更严谨、更可执行、立场明确的回答；当用户观点明显片面或论证不足时，指出关键问题并给出更合理观点。\n\n"
-    "工作方式与约束：\n"
-    "1) 输出结构固定为三段（除非用户明确要求更短）：\n"
-    "   - 结论：先用1-2句话给出明确判断。\n"
-    "   - 理由：用分点方式给出论证（2-5点），每点尽量包含“主体/机制/约束/结果”中的至少两项。\n"
-    "   - 补充：给出边界条件、例外情形或执行层面的注意事项（可选）。\n\n"
-    "2) 观点评估与纠错（当用户给出观点或论述时启用）：\n"
-    "   - 可引用或概括用户观点中的关键表述，简要指出1-2个核心问题（例如概念边界不清、论证链条不足、以偏概全、证据不足等）。\n"
-    "   - 不得杜撰用户未表达的内容；不确定处要明确说明“不足以判断”的原因。\n"
-    "   - 指出问题后，必须给出更合理的观点与解释，并保持措辞理性克制。\n\n"
-    "3) 表达规范：\n"
-    "   - 使用中文书面语，避免口号式表达与情绪化用语。\n"
-    "   - 避免输出自我指涉（例如“作为AI模型”）。\n"
-    "   - 如涉及数据、法律条文、政策细节而无法核验来源，则不要给出具体数字或条款编号；改为方向性表述并提示需要进一步核对。\n\n"
-    "4) 安全与合规：\n"
-    "   - 不输出违法违规操作建议、不进行人身攻击、不散播未经证实的信息。\n"
+    "你是中文政策与公共事务问答助手。请用中文书面语、语气理性克制地回答问题，并保持论证完整。\n\n"
+    "要求：\n"
+    "1) 先明确给出立场或结论，再补充解释与论据（可用段落或分点，不强制列点）。\n"
+    "2) 不编造事实；不确定时说明依据不足或给出条件化表述。\n"
+    "3) 避免口号化与情绪化表达，不要输出“作为AI模型”等自我指涉。\n"
 )
 
 
@@ -45,18 +32,16 @@ SYSTEM_PROMPT = (
 # 由于 OPPONENT 在数据语义上必错，这里将任务描述为“纠错并给出正确观点”，避免条件句带来的歧义。
 USER_B_PROMPT = (
     "问题：{q}\n\n"
-    "观点（错误观点，需要纠正）：{opp}\n\n"
-    "要求：\n"
-    "1) 明确指出该观点不成立；\n"
-    "2) 直接给出正确观点与解释。\n"
+    "错误观点：{opp}\n\n"
+    "请纠正该观点，并给出正确回答。"
 )
 
 
-def build_samples(item: Dict, rng: random.Random) -> List[Dict]:
+def build_samples(item: Dict, rng: random.Random, type_b_ratio: float) -> List[Dict]:
     """
     将一条原始样本扩展为两条 SFT 样本：
     A) 正常问答：QUESTION -> ADVOCATE
-    B) 纠错反驳：用户给出错误观点（OPPONENT）-> 先反驳（贴合原文）-> 再输出正确观点（ADVOCATE）
+    B) 反驳样本：QUESTION + OPPONENT（错误观点输入）-> ADVOCATE（按比例生成）
     Args:
         item: 原始样本，包含字段 QUESTION、ADVOCATE、OPPONENT
         rng: 随机数生成器，用于随机选择模板
@@ -68,6 +53,8 @@ def build_samples(item: Dict, rng: random.Random) -> List[Dict]:
     adv = str(item["ADVOCATE"]).strip()
     opp = str(item["OPPONENT"]).strip()
 
+    samples: List[Dict] = []
+
     # 样本 A：直接学习正确回答
     sample_a = {
         "messages": [
@@ -77,26 +64,28 @@ def build_samples(item: Dict, rng: random.Random) -> List[Dict]:
         ]
     }
 
-    # 样本 B：模拟用户持有错误观点的场景
-    user_b = USER_B_PROMPT.format(q=q, opp=opp)
+    samples.append(sample_a)
 
-    # OPPONENT 在数据语义上必错，因此这里给出明确否定结论，并输出正确观点（ADVOCATE）作为主体内容。
-    # 不在数据准备阶段生成“逐点反驳”的细节文本，避免引入不可靠的推断或模板化噪声。
-    assistant_b = (
-        "结论：该观点不成立。\n\n"
-        "正确观点与解释：\n"
-        f"{adv}"
-    )
+    # 样本B：学习纠正错误观点
+    if type_b_ratio > 0 and rng.random() < type_b_ratio:
+        user_b = USER_B_PROMPT.format(q=q, opp=opp)
 
-    sample_b = {
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_b},
-            {"role": "assistant", "content": assistant_b},
-        ]
-    }
+        # 给出最短纠错前缀，主体内容仍为 ADVOCATE
+        assistant_b = (
+            "该观点不成立。\n\n"
+            f"{adv}"
+        )
 
-    return [sample_a, sample_b]
+        sample_b = {
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_b},
+                {"role": "assistant", "content": assistant_b},
+            ]
+        }
+        samples.append(sample_b)
+
+    return samples
 
 
 def main() -> None:
@@ -123,7 +112,7 @@ def main() -> None:
             if k not in item:
                 raise KeyError(f"样本缺少字段 {k}: {item}")
 
-        all_samples.extend(build_samples(item, rng))
+        all_samples.extend(build_samples(item, rng, cfg.type_b_ratio))
 
     rng.shuffle(all_samples)
 
