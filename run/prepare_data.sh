@@ -1,3 +1,5 @@
 #!/usr/bin/env bash
 set -e
-uv run python prepare_sft_data.py
+
+cd "$(dirname "$0")/.."
+uv run python -m src.ft.prepare_sft_data

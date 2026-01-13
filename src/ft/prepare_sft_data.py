@@ -15,7 +15,7 @@ import os
 import random
 from typing import Dict, List
 
-from configs.utils_config import load_data_prep_config
+from src.configs.utils_config import load_data_prep_config
 
 
 # System prompt 主要约束输出结构、纠错流程与表达规范。
@@ -41,15 +41,15 @@ SYSTEM_PROMPT = (
 )
 
 
-# B 类样本用于覆盖“用户先给出观点（可能错误/片面）”的输入分布。
-# SFT 阶段不强行要求逐条反驳，避免与当前 assistant 输出产生指令-输出不一致。
-USER_B_TEMPLATES = [
-    "问题：{q}\n\n观点（待评估）：{opp}\n\n请判断该观点是否成立。若不成立：用1-2句话指出关键问题，然后给出更合理的观点与解释。",
-    "问题：{q}\n\n我的观点：{opp}\n\n请简要说明该观点哪里不严谨（不需要逐条展开），并给出更合理的观点与解释。",
-    "问题：{q}\n\n下面是我的回答：{opp}\n\n请指出其中最关键的偏差点（1-2点即可），然后给出一版更合理的回答。",
-    "问题：{q}\n\n我对这个问题的理解是：{opp}\n\n请判断是否存在明显偏差；如有，请先简要指出，再给出更严谨的解释与结论。",
-    "问题：{q}\n\n观点A：{opp}\n\n请评估观点A。若不成立：简要指出核心问题，再给出更合理的观点与解释。",
-]
+# B 类样本用于覆盖“用户先给出错误观点，需要被纠正”的输入分布。
+# 由于 OPPONENT 在数据语义上必错，这里将任务描述为“纠错并给出正确观点”，避免条件句带来的歧义。
+USER_B_PROMPT = (
+    "问题：{q}\n\n"
+    "观点（错误观点，需要纠正）：{opp}\n\n"
+    "要求：\n"
+    "1) 明确指出该观点不成立；\n"
+    "2) 直接给出正确观点与解释。\n"
+)
 
 
 def build_samples(item: Dict, rng: random.Random) -> List[Dict]:
@@ -78,11 +78,10 @@ def build_samples(item: Dict, rng: random.Random) -> List[Dict]:
     }
 
     # 样本 B：模拟用户持有错误观点的场景
-    template = rng.choice(USER_B_TEMPLATES)
-    user_b = template.format(q=q, opp=opp)
+    user_b = USER_B_PROMPT.format(q=q, opp=opp)
 
-    # 纠错部分不预设“错因类型”，仅固定输出结构与“贴合原文”的约束，
-    # 避免在训练数据中引入不真实断言，或让模型学到机械套话。
+    # OPPONENT 在数据语义上必错，因此这里给出明确否定结论，并输出正确观点（ADVOCATE）作为主体内容。
+    # 不在数据准备阶段生成“逐点反驳”的细节文本，避免引入不可靠的推断或模板化噪声。
     assistant_b = (
         "结论：该观点不成立。\n\n"
         "正确观点与解释：\n"
