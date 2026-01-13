@@ -1,127 +1,201 @@
 from __future__ import annotations
 
 import os
+import re
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 import torch
 from datasets import load_dataset
 from transformers import TrainingArguments
-from trl import SFTTrainer
+
 from unsloth import FastLanguageModel
+from trl import SFTTrainer
 
-from src.configs.utils_config import load_sft_config, find_latest_checkpoint
-
-
-CONFIG_PATH = "./configs/sft.toml"
+from src.configs.utils_config import load_sft_config
 
 
-def pick_dtype():
-    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
-        return torch.bfloat16
-    return torch.float16
+def _find_latest_checkpoint(output_dir: str) -> Optional[str]:
+    """
+    返回 output_dir 下最新的 checkpoint-* 路径；若不存在则返回 None。
+    """
+    p = Path(output_dir)
+    if not p.exists():
+        return None
+
+    ckpts = []
+    for d in p.iterdir():
+        if d.is_dir() and d.name.startswith("checkpoint-"):
+            m = re.match(r"checkpoint-(\d+)$", d.name)
+            if m:
+                ckpts.append((int(m.group(1)), str(d)))
+
+    if not ckpts:
+        return None
+
+    ckpts.sort(key=lambda x: x[0])
+    return ckpts[-1][1]
 
 
-def main():
-    cfg = load_sft_config(CONFIG_PATH)
-    dtype = pick_dtype()
+def _messages_to_text(tokenizer, messages: List[Dict[str, Any]]) -> str:
+    """
+    将 OpenAI 风格 messages 转为单条训练文本。
+    Qwen2.5 Instruct 支持 chat template；这里不添加 generation prompt，
+    因为 messages 中已经包含 assistant 的目标输出。
+    """
+    return tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=False,
+    )
 
-    train_jsonl = os.path.join(cfg.sft_data_dir, "train.jsonl")
-    eval_jsonl  = os.path.join(cfg.sft_data_dir, "eval.jsonl")
-    if not os.path.exists(train_jsonl) or not os.path.exists(eval_jsonl):
-        raise FileNotFoundError(
-            f"未找到 {train_jsonl} 或 {eval_jsonl}，请先运行 prepare_sft_data.py"
-        )
 
-    # 1) Load base model from local path (4bit)
+def main() -> None:
+    # 避免 tokenizer 多进程告警与潜在死锁
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+    cfg = load_sft_config()
+
+    # -----------------------------
+    # 配置字段（按你的 sft.toml 约定）
+    # 如字段名与你现有配置不同，在这里改映射即可
+    # -----------------------------
+    model_path: str = cfg.model_path
+    train_jsonl: str = cfg.train_jsonl
+    eval_jsonl: str = cfg.eval_jsonl
+    output_dir: str = cfg.output_dir
+
+    max_seq_len: int = cfg.max_seq_len
+    per_device_batch_size: int = cfg.per_device_batch_size
+    grad_accum_steps: int = cfg.grad_accum_steps
+    learning_rate: float = cfg.learning_rate
+    num_train_epochs: float = cfg.num_train_epochs
+    warmup_ratio: float = cfg.warmup_ratio
+    lr_scheduler_type: str = cfg.lr_scheduler_type
+
+    logging_steps: int = cfg.logging_steps
+    save_steps: int = cfg.save_steps
+    eval_steps: int = cfg.eval_steps
+    save_total_limit: int = cfg.save_total_limit
+    seed: int = cfg.seed
+
+    packing: bool = cfg.packing  # True 会把多条样本 pack 到一个序列，提升吞吐
+    lora_r: int = cfg.lora_r
+    lora_alpha: int = cfg.lora_alpha
+    lora_dropout: float = cfg.lora_dropout
+
+    resume_enabled: bool = cfg.resume_enabled  # True 时自动找 checkpoint 续训
+
+    # -----------------------------
+    # dtype / 量化策略
+    # -----------------------------
+    # 5070Ti 这类新卡一般支持 bf16；不支持则回退 fp16
+    bf16_supported = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    use_bf16 = bool(bf16_supported)
+    use_fp16 = not use_bf16
+
+    # -----------------------------
+    # 1) 加载模型（本地路径，不走在线下载）
+    # -----------------------------
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=cfg.model_path,
-        max_seq_length=cfg.max_seq_len,
-        dtype=dtype,
+        model_name=model_path,
+        max_seq_length=max_seq_len,
+        dtype=torch.bfloat16 if use_bf16 else torch.float16,
         load_in_4bit=True,
     )
 
-    # 2) LoRA
+    # 只训练 LoRA，降低显存压力
     model = FastLanguageModel.get_peft_model(
         model,
-        r=cfg.lora_r,
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
-        lora_alpha=cfg.lora_alpha,
-        lora_dropout=cfg.lora_dropout,
+        r=lora_r,
+        lora_alpha=lora_alpha,
+        lora_dropout=lora_dropout,
         bias="none",
         use_gradient_checkpointing="unsloth",
-        random_state=cfg.seed,
+        random_state=seed,
     )
 
-    # 3) Load dataset (jsonl with messages)
-    ds = load_dataset("json", data_files={"train": train_jsonl, "eval": eval_jsonl})
+    # -----------------------------
+    # 2) 读取数据集（JSONL，每行一个对象，包含 messages）
+    # -----------------------------
+    data_files = {"train": train_jsonl, "validation": eval_jsonl}
+    ds = load_dataset("json", data_files=data_files)
 
-    # 4) messages -> text
-    def to_text(ex):
-        text = tokenizer.apply_chat_template(
-            ex["messages"],
-            tokenize=False,
-            add_generation_prompt=False,
-        )
+    # 将 messages -> text，供 SFTTrainer 训练
+    def map_fn(example: Dict[str, Any]) -> Dict[str, Any]:
+        messages = example["messages"]
+        text = _messages_to_text(tokenizer, messages)
         return {"text": text}
 
-    ds = ds.map(to_text, remove_columns=ds["train"].column_names)
-
-    # 5) Training args
-    args = TrainingArguments(
-        output_dir=cfg.output_dir,
-        per_device_train_batch_size=cfg.per_device_batch_size,
-        gradient_accumulation_steps=cfg.grad_accum_steps,
-        learning_rate=cfg.learning_rate,
-        num_train_epochs=cfg.num_train_epochs,
-        warmup_ratio=cfg.warmup_ratio,
-        lr_scheduler_type=cfg.lr_scheduler_type,
-
-        logging_steps=cfg.logging_steps,
-
-        save_strategy="steps",
-        save_steps=cfg.save_steps,
-        save_total_limit=cfg.save_total_limit,
-
-        evaluation_strategy="steps",
-        eval_steps=cfg.eval_steps,
-
-        bf16=(dtype == torch.bfloat16),
-        fp16=(dtype == torch.float16),
-
-        optim="adamw_torch",
-        weight_decay=0.0,
-        max_grad_norm=1.0,
-
-        report_to="none",
-        seed=cfg.seed,
+    ds = ds.map(
+        map_fn,
+        remove_columns=[c for c in ds["train"].column_names if c != "messages"],
+        desc="Formatting messages with chat template",
     )
 
+    # -----------------------------
+    # 3) TrainingArguments（支持断点续训）
+    # -----------------------------
+    os.makedirs(output_dir, exist_ok=True)
+
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        per_device_train_batch_size=per_device_batch_size,
+        per_device_eval_batch_size=per_device_batch_size,
+        gradient_accumulation_steps=grad_accum_steps,
+        learning_rate=learning_rate,
+        num_train_epochs=num_train_epochs,
+        warmup_ratio=warmup_ratio,
+        lr_scheduler_type=lr_scheduler_type,
+        logging_steps=logging_steps,
+        evaluation_strategy="steps",
+        eval_steps=eval_steps,
+        save_strategy="steps",
+        save_steps=save_steps,
+        save_total_limit=save_total_limit,
+        bf16=use_bf16,
+        fp16=use_fp16,
+        optim="adamw_torch",
+        seed=seed,
+        report_to="none",
+        remove_unused_columns=False,
+    )
+
+    # -----------------------------
+    # 4) SFTTrainer
+    # -----------------------------
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=ds["train"],
-        eval_dataset=ds["eval"],
+        eval_dataset=ds["validation"],
         dataset_text_field="text",
-        max_seq_length=cfg.max_seq_len,
-        packing=cfg.packing,
-        args=args,
+        max_seq_length=max_seq_len,
+        packing=packing,
+        args=training_args,
     )
 
-    resume_ckpt = None
-    if cfg.resume:
-        resume_ckpt = find_latest_checkpoint(cfg.output_dir)
-        if resume_ckpt:
-            print(f"Resume from checkpoint: {resume_ckpt}")
-        else:
-            print("No checkpoint found. Start from scratch.")
+    # -----------------------------
+    # 5) 自动断点续训（从最新 checkpoint-* 继续）
+    # -----------------------------
+    resume_ckpt = _find_latest_checkpoint(output_dir) if resume_enabled else None
+    if resume_ckpt:
+        print(f"[SFT] Resuming from checkpoint: {resume_ckpt}")
+    else:
+        print("[SFT] Starting training from scratch")
 
-    trainer.train(resume_from_checkpoint=resume_ckpt if resume_ckpt else None)
+    # -----------------------------
+    # 6) 开始训练
+    # -----------------------------
+    trainer.train(resume_from_checkpoint=resume_ckpt)
 
-    # Save adapter + tokenizer to output_dir
-    trainer.model.save_pretrained(cfg.output_dir)
-    tokenizer.save_pretrained(cfg.output_dir)
-    print(f"SFT done. Saved to: {cfg.output_dir}")
+    # 保存最终 LoRA adapter + tokenizer
+    trainer.save_model(output_dir)
+    tokenizer.save_pretrained(output_dir)
+
+    print("[SFT] Done.")
+    print(f"[SFT] Output dir: {output_dir}")
 
 
 if __name__ == "__main__":
