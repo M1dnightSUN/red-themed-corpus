@@ -15,6 +15,9 @@ wheels/
 # vscode
 .vscode/
 
+# pycharm
+.idea/
+
 # --- Self ---
 /data
 /logs
