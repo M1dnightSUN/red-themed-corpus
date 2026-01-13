@@ -68,6 +68,15 @@ def find_latest_checkpoint(output_dir: str | Path) -> Optional[str]:
 
 
 @dataclass
+class DataPrepConfig:
+    input_json: str
+    out_dir: str
+    seed: int
+    eval_ratio: float
+    max_items: int
+
+
+@dataclass
 class SFTConfig:
     model_path: str
     input_json: str
@@ -133,6 +142,19 @@ def _resolve_path(p: str) -> str:
     if path.is_absolute():
         return str(path)
     return str(project_root() / path)
+
+
+def load_data_prep_config() -> DataPrepConfig:
+    cfg_path = Path("src/configs/data_prep.toml")
+    cfg = load_toml(cfg_path)
+
+    return DataPrepConfig(
+        input_json=str(cfg["paths"]["input_json"]),
+        out_dir=str(cfg["paths"]["out_dir"]),
+        seed=int(cfg["data"]["seed"]),
+        eval_ratio=float(cfg["data"]["eval_ratio"]),
+        max_items=int(cfg["data"].get("max_items", -1)),
+    )
 
 
 def load_sft_config() -> SFTConfig:

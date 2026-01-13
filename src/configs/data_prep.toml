@@ -1,0 +1,8 @@
+[paths]
+input_json = "data/qa_tagged.json"
+out_dir = "data/sft"
+
+[data]
+seed = 42
+eval_ratio = 0.02
+max_items = -1

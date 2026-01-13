@@ -1,13 +1,8 @@
 [paths]
 model_path = "D:/models/Qwen2.5-7B-Instruct"
-input_json = "data/red_dataset.json"
-sft_data_dir = "data/sft"
+train_jsonl = "data/sft/train.jsonl"
+eval_jsonl = "data/sft/eval.jsonl"
 output_dir = "data/ckpt_sft"
-
-[data]
-eval_ratio = 0.02
-seed = 42
-max_items = -1
 
 [train]
 max_seq_len = 2048
@@ -22,7 +17,11 @@ save_steps = 500
 eval_steps = 500
 save_total_limit = 2
 packing = true
-lora_r = 16
-lora_alpha = 16
-lora_dropout = 0.0
-resume = true
+
+[lora]
+r = 16
+alpha = 16
+dropout = 0.0
+
+[resume]
+enabled = true

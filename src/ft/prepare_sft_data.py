@@ -15,7 +15,7 @@ import os
 import random
 from typing import Dict, List
 
-from configs.utils_config import load_sft_config
+from configs.utils_config import load_data_prep_config
 
 
 # System prompt 主要约束输出结构、纠错流程与表达规范。
@@ -101,9 +101,9 @@ def build_samples(item: Dict, rng: random.Random) -> List[Dict]:
 
 
 def main() -> None:
-    cfg = load_sft_config()
+    cfg = load_data_prep_config()
 
-    os.makedirs(cfg.sft_data_dir, exist_ok=True)
+    os.makedirs(cfg.out_dir, exist_ok=True)
 
     # 读取原始数据（JSON 数组）。训练侧使用 JSONL（逐行 JSON）便于切分与复用。
     with open(cfg.input_json, "r", encoding="utf-8") as f:
@@ -132,8 +132,8 @@ def main() -> None:
     eval_samples = all_samples[:n_eval]
     train_samples = all_samples[n_eval:]
 
-    train_path = os.path.join(cfg.sft_data_dir, "train.jsonl")
-    eval_path = os.path.join(cfg.sft_data_dir, "eval.jsonl")
+    train_path = os.path.join(cfg.out_dir, "train.jsonl")
+    eval_path = os.path.join(cfg.out_dir, "eval.jsonl")
 
     with open(train_path, "w", encoding="utf-8") as f:
         for x in train_samples:
