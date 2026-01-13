@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
 set -e
-uv run python train_sft_unsloth.py
 
+cd "$(dirname "$0")/.."
+uv run python -m src.ft.train_sft_unsloth

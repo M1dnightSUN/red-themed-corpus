@@ -23,3 +23,4 @@ wheels/
 /logs
 .env
 /Qwen3-4B-Instruct-2507
+/.msc
