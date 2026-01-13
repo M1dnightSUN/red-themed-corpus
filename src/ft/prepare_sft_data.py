@@ -17,22 +17,52 @@ from typing import Dict, List
 
 from configs.utils_config import load_sft_config
 
-# System prompt 用于约束模型的输出风格与纠错行为。
+
+# System prompt 主要约束输出结构、纠错流程与表达规范。
+# 具体观点结论由训练样本（ADVOCATE）提供，不在这里硬编码立场内容。
 SYSTEM_PROMPT = (
-    "你是一名中文问答助手。你需要给出立场明确、逻辑严谨、表达克制的回答。\n"
-    "规则：\n"
-    "1) 先给出结论，再给出条理化论证（分点）。\n"
-    "2) 不编造事实；不确定时使用“可能/通常/取决于”，并说明依据不足。\n"
-    "3) 当用户表达明显错误观点时：必须先指出错误点（逐点、具体、贴合用户原文），再给出更合理的观点与解释。\n"
-    "4) 回答使用中文，避免空泛口号；指出错误点时不得杜撅用户未表达的内容。"
+    "你是中文政策与公共事务问答助手，面向社会治理、公益、基层治理、产业发展、党建与青年发展等议题进行对话式解答。\n"
+    "你的任务是：在不编造事实的前提下，给出更严谨、更可执行、立场明确的回答；当用户观点明显片面或论证不足时，指出关键问题并给出更合理观点。\n\n"
+    "工作方式与约束：\n"
+    "1) 输出结构固定为三段（除非用户明确要求更短）：\n"
+    "   - 结论：先用1-2句话给出明确判断。\n"
+    "   - 理由：用分点方式给出论证（2-5点），每点尽量包含“主体/机制/约束/结果”中的至少两项。\n"
+    "   - 补充：给出边界条件、例外情形或执行层面的注意事项（可选）。\n\n"
+    "2) 观点评估与纠错（当用户给出观点或论述时启用）：\n"
+    "   - 可引用或概括用户观点中的关键表述，简要指出1-2个核心问题（例如概念边界不清、论证链条不足、以偏概全、证据不足等）。\n"
+    "   - 不得杜撰用户未表达的内容；不确定处要明确说明“不足以判断”的原因。\n"
+    "   - 指出问题后，必须给出更合理的观点与解释，并保持措辞理性克制。\n\n"
+    "3) 表达规范：\n"
+    "   - 使用中文书面语，避免口号式表达与情绪化用语。\n"
+    "   - 避免输出自我指涉（例如“作为AI模型”）。\n"
+    "   - 如涉及数据、法律条文、政策细节而无法核验来源，则不要给出具体数字或条款编号；改为方向性表述并提示需要进一步核对。\n\n"
+    "4) 安全与合规：\n"
+    "   - 不输出违法违规操作建议、不进行人身攻击、不散播未经证实的信息。\n"
 )
 
 
-def build_samples(item: Dict) -> List[Dict]:
+# B 类样本用于覆盖“用户先给出观点（可能错误/片面）”的输入分布。
+# SFT 阶段不强行要求逐条反驳，避免与当前 assistant 输出产生指令-输出不一致。
+USER_B_TEMPLATES = [
+    "问题：{q}\n\n观点（待评估）：{opp}\n\n请判断该观点是否成立。若不成立：用1-2句话指出关键问题，然后给出更合理的观点与解释。",
+    "问题：{q}\n\n我的观点：{opp}\n\n请简要说明该观点哪里不严谨（不需要逐条展开），并给出更合理的观点与解释。",
+    "问题：{q}\n\n下面是我的回答：{opp}\n\n请指出其中最关键的偏差点（1-2点即可），然后给出一版更合理的回答。",
+    "问题：{q}\n\n我对这个问题的理解是：{opp}\n\n请判断是否存在明显偏差；如有，请先简要指出，再给出更严谨的解释与结论。",
+    "问题：{q}\n\n观点A：{opp}\n\n请评估观点A。若不成立：简要指出核心问题，再给出更合理的观点与解释。",
+]
+
+
+def build_samples(item: Dict, rng: random.Random) -> List[Dict]:
     """
-    将一条原始样本扩展为两条 SFT 训练样本：
+    将一条原始样本扩展为两条 SFT 样本：
     A) 正常问答：QUESTION -> ADVOCATE
-    B) 纠错反驳：用户给出错误观点（OPPONENT）-> 先反驳（要求贴合原文）-> 再输出正确观点（ADVOCATE）
+    B) 纠错反驳：用户给出错误观点（OPPONENT）-> 先反驳（贴合原文）-> 再输出正确观点（ADVOCATE）
+    Args:
+        item: 原始样本，包含字段 QUESTION、ADVOCATE、OPPONENT
+        rng: 随机数生成器，用于随机选择模板
+
+    Returns:
+        两条 SFT 样本的列表
     """
     q = str(item["QUESTION"]).strip()
     adv = str(item["ADVOCATE"]).strip()
@@ -47,27 +77,16 @@ def build_samples(item: Dict) -> List[Dict]:
         ]
     }
 
-    # 样本 B：模拟用户持有错误观点的场景，训练“先反驳后纠正”的对话策略
-    user_b = (
-        f"问题：{q}\n\n"
-        f"我的观点：{opp}\n\n"
-        "请你评估我的观点是否成立。如果不成立：\n"
-        "1) 必须引用或概括我观点中的具体句子/要点来逐点反驳（不要写空泛套话）；\n"
-        "2) 然后给出更合理的观点与解释；\n"
-        "3) 最后用一句话总结。"
-    )
+    # 样本 B：模拟用户持有错误观点的场景
+    template = rng.choice(USER_B_TEMPLATES)
+    user_b = template.format(q=q, opp=opp)
 
-    # 纠错部分不预设“错因类型”，只固定输出结构与“贴合原文”的约束。
-    # 这样可以避免训练数据在纠错点上引入不真实断言或形成套话模式。
+    # 纠错部分不预设“错因类型”，仅固定输出结构与“贴合原文”的约束，
+    # 避免在训练数据中引入不真实断言，或让模型学到机械套话。
     assistant_b = (
-        "结论：该观点不成立或不够严谨。\n\n"
-        "错误点（需引用或概括上面观点中的具体内容逐点说明）：\n"
-        "1) …（引用/概括观点中的具体表述A，并说明为何不成立/不充分）\n"
-        "2) …（引用/概括观点中的具体表述B，并说明逻辑问题或证据缺口）\n"
-        "3) …（如仍有关键问题再补充；若不足三点，可写“无更多关键错误点”）\n\n"
-        "更合理的观点与解释：\n"
-        f"{adv}\n\n"
-        "总结：请基于可验证的事实与清晰的论证链条形成判断。"
+        "结论：该观点不成立。\n\n"
+        "正确观点与解释：\n"
+        f"{adv}"
     )
 
     sample_b = {
@@ -86,7 +105,7 @@ def main() -> None:
 
     os.makedirs(cfg.sft_data_dir, exist_ok=True)
 
-    # 读取原始数据（JSON 数组）。训练侧使用 JSONL（逐行 JSON）更便于切分、流式处理与断点复用。
+    # 读取原始数据（JSON 数组）。训练侧使用 JSONL（逐行 JSON）便于切分与复用。
     with open(cfg.input_json, "r", encoding="utf-8") as f:
         raw = json.load(f)
 
@@ -96,20 +115,19 @@ def main() -> None:
     if cfg.max_items and cfg.max_items > 0:
         raw = raw[: cfg.max_items]
 
-    random.seed(cfg.seed)
+    rng = random.Random(cfg.seed)
 
-    # 扩展样本：每条原始样本生成两条 SFT 训练样本
     all_samples: List[Dict] = []
     for item in raw:
-        # 基础字段校验，避免训练时出现隐性缺失导致的脏数据
+        # 字段校验，避免缺字段导致训练数据静默污染
         for k in ("QUESTION", "ADVOCATE", "OPPONENT"):
             if k not in item:
                 raise KeyError(f"样本缺少字段 {k}: {item}")
 
-        all_samples.extend(build_samples(item))
+        all_samples.extend(build_samples(item, rng))
 
-    # 打乱并划分 train/eval
-    random.shuffle(all_samples)
+    rng.shuffle(all_samples)
+
     n_eval = max(1, int(len(all_samples) * cfg.eval_ratio))
     eval_samples = all_samples[:n_eval]
     train_samples = all_samples[n_eval:]
@@ -117,7 +135,6 @@ def main() -> None:
     train_path = os.path.join(cfg.sft_data_dir, "train.jsonl")
     eval_path = os.path.join(cfg.sft_data_dir, "eval.jsonl")
 
-    # 写出 JSONL：一行一个 JSON 对象
     with open(train_path, "w", encoding="utf-8") as f:
         for x in train_samples:
             f.write(json.dumps(x, ensure_ascii=False) + "\n")
