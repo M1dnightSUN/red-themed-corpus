@@ -148,7 +148,7 @@ def main() -> None:
         warmup_ratio=warmup_ratio,
         lr_scheduler_type=lr_scheduler_type,
         logging_steps=logging_steps,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=eval_steps,
         save_strategy="steps",
         save_steps=save_steps,
