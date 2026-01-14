@@ -24,3 +24,4 @@ wheels/
 .env
 /Qwen3-4B-Instruct-2507
 /.msc
+/unsloth_compiled_cache/
