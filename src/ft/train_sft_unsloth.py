@@ -58,7 +58,7 @@ def main() -> None:
     cfg = load_sft_config()
 
     # -----------------------------
-    # 配置字段（按你的 sft.toml 约定）
+    # 配置字段（按sft.toml 约定）
     # 如字段名与你现有配置不同，在这里改映射即可
     # -----------------------------
     model_path: str = cfg.model_path
@@ -90,13 +90,12 @@ def main() -> None:
     # -----------------------------
     # dtype / 量化策略
     # -----------------------------
-    # 5070Ti 这类新卡一般支持 bf16；不支持则回退 fp16
     bf16_supported = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     use_bf16 = bool(bf16_supported)
     use_fp16 = not use_bf16
 
     # -----------------------------
-    # 1) 加载模型（本地路径，不走在线下载）
+    # 1) 加载模型（本地路径）
     # -----------------------------
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_path,
@@ -105,7 +104,7 @@ def main() -> None:
         load_in_4bit=True,
     )
 
-    # 只训练 LoRA，降低显存压力
+    # 添加 LoRA adapter
     model = FastLanguageModel.get_peft_model(
         model,
         r=lora_r,

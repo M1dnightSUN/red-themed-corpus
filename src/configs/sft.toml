@@ -1,8 +1,8 @@
 [paths]
-model_path = "D:/models/Qwen2.5-7B-Instruct"
+model_path = "Qwen3-4B-Instruct-2507"
 train_jsonl = "data/sft/train.jsonl"
 eval_jsonl = "data/sft/eval.jsonl"
-output_dir = "data/ckpt_sft"
+output_dir = "model/ckpt_sft"
 
 [train]
 max_seq_len = 2048

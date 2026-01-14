@@ -79,34 +79,36 @@ class DataPrepConfig:
 
 @dataclass
 class SFTConfig:
+    # [paths]
     model_path: str
-    input_json: str
-    sft_data_dir: str
+    train_jsonl: str
+    eval_jsonl: str
     output_dir: str
 
-    eval_ratio: float
-    seed: int
-    max_items: int
-
+    # [train]
     max_seq_len: int
     per_device_batch_size: int
     grad_accum_steps: int
     learning_rate: float
-    num_train_epochs: int
+    num_train_epochs: float
     warmup_ratio: float
     lr_scheduler_type: str
-
     logging_steps: int
     save_steps: int
     eval_steps: int
     save_total_limit: int
     packing: bool
 
+    # [lora]
     lora_r: int
     lora_alpha: int
     lora_dropout: float
 
-    resume: bool
+    # [resume]
+    resume_enabled: bool
+
+    # optional (not in your toml, but useful)
+    seed: int = 42
 
 
 @dataclass
@@ -159,39 +161,49 @@ def load_data_prep_config() -> DataPrepConfig:
     )
 
 
-def load_sft_config() -> SFTConfig:
-    cfg_path = project_root() / "src" / "configs" / "sft.toml"
-    cfg = load_toml(cfg_path)
+def load_sft_config(config_path: str = "src/configs/sft.toml") -> SFTConfig:
+    """
+    读取 SFT 训练配置（与给定 sft.toml 完全对齐）。
+    默认假设运行目录是项目根目录。
+    """
+    cfg = load_toml(Path(config_path))
+
+    paths = cfg["paths"]
+    train = cfg["train"]
+    lora = cfg["lora"]
+    resume = cfg["resume"]
 
     return SFTConfig(
-        model_path=_resolve_path(str(cfg["paths"]["model_path"])),
-        input_json=_resolve_path(str(cfg["paths"]["input_json"])),
-        sft_data_dir=_resolve_path(str(cfg["paths"]["sft_data_dir"])),
-        output_dir=_resolve_path(str(cfg["paths"]["output_dir"])),
+        # [paths]
+        model_path=str(paths["model_path"]),
+        train_jsonl=str(paths["train_jsonl"]),
+        eval_jsonl=str(paths["eval_jsonl"]),
+        output_dir=str(paths["output_dir"]),
 
-        eval_ratio=float(cfg["data"]["eval_ratio"]),
-        seed=int(cfg["data"]["seed"]),
-        max_items=int(cfg["data"].get("max_items", -1)),
+        # [train]
+        max_seq_len=int(train["max_seq_len"]),
+        per_device_batch_size=int(train["per_device_batch_size"]),
+        grad_accum_steps=int(train["grad_accum_steps"]),
+        learning_rate=float(train["learning_rate"]),
+        num_train_epochs=float(train["num_train_epochs"]),
+        warmup_ratio=float(train["warmup_ratio"]),
+        lr_scheduler_type=str(train["lr_scheduler_type"]),
+        logging_steps=int(train["logging_steps"]),
+        save_steps=int(train["save_steps"]),
+        eval_steps=int(train["eval_steps"]),
+        save_total_limit=int(train["save_total_limit"]),
+        packing=bool(train["packing"]),
 
-        max_seq_len=int(cfg["train"]["max_seq_len"]),
-        per_device_batch_size=int(cfg["train"]["per_device_batch_size"]),
-        grad_accum_steps=int(cfg["train"]["grad_accum_steps"]),
-        learning_rate=float(cfg["train"]["learning_rate"]),
-        num_train_epochs=int(cfg["train"]["num_train_epochs"]),
-        warmup_ratio=float(cfg["train"]["warmup_ratio"]),
-        lr_scheduler_type=str(cfg["train"]["lr_scheduler_type"]),
+        # [lora]
+        lora_r=int(lora["r"]),
+        lora_alpha=int(lora["alpha"]),
+        lora_dropout=float(lora["dropout"]),
 
-        logging_steps=int(cfg["train"]["logging_steps"]),
-        save_steps=int(cfg["train"]["save_steps"]),
-        eval_steps=int(cfg["train"]["eval_steps"]),
-        save_total_limit=int(cfg["train"]["save_total_limit"]),
-        packing=bool(cfg["train"]["packing"]),
+        # [resume]
+        resume_enabled=bool(resume["enabled"]),
 
-        lora_r=int(cfg["train"]["lora_r"]),
-        lora_alpha=int(cfg["train"]["lora_alpha"]),
-        lora_dropout=float(cfg["train"]["lora_dropout"]),
-
-        resume=bool(cfg["train"]["resume"]),
+        # optional
+        seed=int(train.get("seed", 42)),
     )
 
 
