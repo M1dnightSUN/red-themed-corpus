@@ -1,5 +1,5 @@
 [paths]
-model_path = "Qwen3-4B-Instruct-2507"
+model_path = "./Qwen3-4B-Instruct-2507"
 train_jsonl = "data/sft/train.jsonl"
 eval_jsonl = "data/sft/eval.jsonl"
 output_dir = "model/ckpt_sft"
